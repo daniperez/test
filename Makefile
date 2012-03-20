@@ -1,2 +1,4 @@
 main: test.cpp
-	gcc -o test test.cpp
+	g++ -o test test.cpp
+test: main
+	./test
