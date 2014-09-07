@@ -1,1 +1,1 @@
-[![Build Status](https://secure.travis-ci.org/daniperez/test.png?branch=master)](http://travis-ci.org/daniperez/test)
+[![Build Status](https://circleci.com/gh/daniperez/test/tree/master.png)
