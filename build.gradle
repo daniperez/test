@@ -1,0 +1,95 @@
+apply plugin: 'groovy'
+apply plugin: 'maven-publish'
+apply plugin: 'eclipse'
+
+sourceCompatibility = 1.6
+targetCompatibility = 1.6
+
+repositories {
+  mavenCentral()
+  jcenter()
+}
+def buildNumber = System.getenv()['BUILD_NUMBER']
+def gitCommit = System.getenv()['GIT_COMMIT']
+//Order do matter, first build number then gitCommit, Why ? 42.
+if ( buildNumber != null ) {
+  version = version + '-b' + buildNumber  
+} else {
+  version = version + '-local'
+}
+if ( gitCommit != null ) {
+  version = version + '-r' + gitCommit.substring(0, 7)
+}
+
+//using curl -x MKCOL to create folder if not yet there...
+def mavenRepo = 'http://example.com/artifacts/mavenrepo/'
+def groupPath = project.group.replaceAll('\\.','/') 
+
+project.task("createMavenRepoUrl", type: Exec) {
+	commandLine 'curl','-X','MKCOL', mavenRepo + groupPath + '/' + project.name  +' && '+
+			'curl','-X','MKCOL', mavenRepo +groupPath +'/' + project.name + '/' + project.version
+}
+
+publishing {
+  publications {
+    
+    mavenJava(MavenPublication) {
+      from components.java
+
+      artifact sourceJar
+      artifact groovydocJar
+    }
+  }
+  repositories {
+    maven {
+      name "LocalAsr"
+      url "${project.gradle.gradleUserHomeDir}/local_asr"
+    }
+    maven {
+      name "RemoteAsr"
+      url "http://example.com/artifacts/mavenrepo/"
+    }
+    
+  }  
+  task install(dependsOn: 'publishMavenJavaPublicationToLocalAsrRepository') {description='Install to Local repo'}
+  task upload(dependsOn: 'publishMavenJavaPublicationToRemoteAsrRepository') {description='Upload to Remote repo'}
+  upload.dependsOn createMavenRepoUrl  
+}
+
+
+task sourceJar(type: Jar, dependsOn:classes) {
+  classifier = 'sources'
+  from sourceSets.main.allSource
+}
+
+task groovydocJar(type: Jar, dependsOn:groovydoc) {
+  classifier = 'groovydoc'
+  from groovydoc.destinationDir
+}
+
+dependencies {
+  compile(
+    gradleApi(),
+    localGroovy(),
+    'org.eclipse.jgit:org.eclipse.jgit:3.1.+',
+    'org.apache.maven.wagon:wagon-webdav-jackrabbit:2.6',
+    'joda-time:joda-time:2.2',
+    'org.slf4j:slf4j-api:1.7.5',
+    'nl.javadude.gradle.plugins:license-gradle-plugin:0.11.0'
+  )
+  testCompile(
+    ['junit:junit:4.+']
+  )        
+
+}
+
+test {
+  jvmArgs '-Xms512m', '-Xmx1g'
+}
+
+test.dependsOn project.cleanTest
+
+task("wrapper", type: Wrapper) {
+  gradleVersion = '2.0'
+}
+
