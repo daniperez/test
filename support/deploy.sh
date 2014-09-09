@@ -17,6 +17,44 @@ REGION="ap-southeast-2"
 STACK="64bit Amazon Linux 2014.03 v1.0.1 running Docker 1.0.0"
 TIER="Name=WebServer,Type=Standard,Version=1.0"
 
+function get_deploy_url {
+
+    aws elasticbeanstalk describe-environments \
+        --application-name "$APP_LABEL"        \
+        --output=text                          \
+        --region "$REGION" 2>&1                \
+        |  grep ENVIRONMENT | grep -v "Termina" |  cut -f 3
+}
+
+function get_application_environment_bucket {
+
+    aws elasticbeanstalk describe-application-versions \
+        --version-labels "$VERSION_LABEL"              \
+        --application-name "$APP_LABEL"                \
+        --output=text                                  \
+        --region "$REGION"                             \
+        | grep -A 1 "$APP_LABEL"                       \
+        | grep "SOURCEBUNDLE"                          \
+        | cut -f 2
+}
+
+function upload_file {
+
+    FILE=$1
+    S3_BUCKET=$2
+
+    # The file must be uploaded before the environment is created
+    echo "Uploading $FILE to s3://$S3_BUCKET/ ..."
+    OUTPUT=$(aws s3 cp --region "$REGION" $FILE "s3://$S3_BUCKET/" 2>&1)
+
+    if [ $? -eq 0 ]; then
+        echo "$1 copied to [$S3_BUCKET] bucket."
+    else
+        echo "Error: $OUTPUT"
+        exit 1
+    fi
+}
+
 # Checks if the application exists and creates
 # it if it doesn't exist.
 function create_application {
@@ -59,20 +97,12 @@ function create_application {
 #         "ContainerDirectory": "/etc/mysql"
 #     }
 #
+# TODO: s3 has a very useful sync command if we were to sync an entire folder.
 function create_version {
 
-    S3_BUNDLE=$(aws elasticbeanstalk describe-application-versions \
-        --version-labels "$VERSION_LABEL"                          \
-        --application-name "$APP_LABEL"                            \
-        --output=text                                              \
-        --region "$REGION"                                         \
-        | grep -A 1 "$APP_LABEL"                                   \
-        | grep "SOURCEBUNDLE"                                      \
-        | cut -f 2-3)
+    ENVIRONMENT_OUTPUT=$(get_application_environment_bucket)
 
-    S3_BUCKET=""
-
-    if [ "x$S3_BUNDLE" == "x" ]; then
+    if [ "x$ENVIRONMENT_OUTPUT" == "x" ]; then
 
         echo "Version [$VERSION_LABEL] doesn't exist. Creating..."
 
@@ -80,19 +110,22 @@ function create_version {
             --region "$REGION" --output=text 2>&1)
 
         if [ $? -eq 0 ]; then
-            S3_BUCKET="s3://$OUTPUT"
+            S3_BUCKET="$OUTPUT"
             echo "  S3 bucket [$S3_BUCKET] created."
         else
             echo "Error: $OUTPUT"
             exit 1
         fi
 
+        upload_file "Dockerfile" "$S3_BUCKET"
+
         OUTPUT=$(aws elasticbeanstalk create-application-version \
-                   --version-label "$VERSION_LABEL"              \
-                   --application-name "$APP_LABEL"               \
-                   --description "$VERSION_DESCRIPTION"          \
-                   --no-auto-create-application                  \
-                   --source-bundle "$S3_BUCKET" 2>&1)  
+               --version-label "$VERSION_LABEL"              \
+               --application-name "$APP_LABEL"               \
+               --description "$VERSION_DESCRIPTION"          \
+               --no-auto-create-application                  \
+               --source-bundle "S3Bucket=$S3_BUCKET,S3Key=Dockerfile" \
+               --region "$REGION" 2>&1 ) 
 
         if [ $? -eq 0 ]; then
             echo "  Version [$VERSION_LABEL] created."
@@ -102,20 +135,26 @@ function create_version {
         fi
 
      else
-        S3_BUCKET="s3://$(echo $S3_BUNDLE | cut -d " " -f 1)/$(echo $S3_BUNDLE | cut -d " " -f 2)"
+        S3_BUCKET=$ENVIRONMENT_OUTPUT
+
         echo "Version [$VERSION_LABEL] with S3 bucket [$S3_BUCKET] exists."
+
+        upload_file "Dockerfile" "$S3_BUCKET"
+
+        OUTPUT=$(aws elasticbeanstalk update-application-version \
+               --application-name "$APP_LABEL"                   \
+               --version-label "$VERSION_LABEL"                  \
+               --description "$VERSION_DESCRIPTION"              \
+               --region "$REGION" 2>&1 ) 
+
+        if [ $? -eq 0 ]; then
+            echo "Version [$VERSION_LABEL] updated."
+        else
+            echo "Error: $OUTPUT"
+            exit 1
+        fi
     fi
 
-    # TODO: s3 has a very useful sync command if we were to sync an entire folder.
-    echo "Uploading Dockerfile..."
-    OUTPUT=$(aws s3 cp --region "$REGION" Dockerfile "$S3_BUCKET" 2>&1)
-
-    if [ $? -eq 0 ]; then
-        echo "Dockerfile copied to [$S3_BUCKET] bucket."
-    else
-        echo "Error: $OUTPUT"
-        exit 1
-    fi
 }
 
 # When an environment is created or update, the actual code is deployed
@@ -123,16 +162,16 @@ function create_version {
 # if we use Docker or not, and if we use Apache an such things.
 function create_environment {
 
-    OUTPUT=$(aws elasticbeanstalk describe-application-versions    \
-        --application-name "$APP_LABEL"                            \
-        --output=text                                              \
-        --region "$REGION" 2>&1                                    \
+    OUTPUT=$(aws elasticbeanstalk describe-environments \
+        --application-name "$APP_LABEL"                 \
+        --output=text                                   \
+        --region "$REGION" 2>&1                         \
         |  grep ENVIRONMENT | grep -v "Termina" ) # Nor terminated nor terminating
 
     if [ $? -eq 0 ]; then
         echo "Environment running. Updating..."
 
-        OUTPUT=$(aws elasticbeanstalk create-environment      \
+        OUTPUT=$(aws elasticbeanstalk update-environment      \
             --environment-name "$ENV_LABEL"                   \
             --description "$ENV_DESCRIPTION"                  \
             --tier "$TIER"                                    \
@@ -163,6 +202,7 @@ function create_environment {
             echo "Error: $OUTPUT"
             exit 1
         fi
+    fi
 }
 
 create_application
@@ -171,4 +211,6 @@ create_version
 
 create_environment
 
-echo "$APP_LABEL:$VERSION_LABEL deployed!"
+URL=$(get_deploy_url)
+
+echo "$APP_LABEL:$VERSION_LABEL deployed to [$URL]!"
