@@ -1,0 +1,34 @@
+machine:
+  services:
+    - docker
+  # This can be defined also per command
+  environment:
+    APP_NAME=asr-dev
+    ENV_NAME=asr-dev-env
+    ENV_DESCRIPTION=Environment for ASR Development server
+    REGION=ap-southeast-2
+
+deployment:
+  production:
+    branch: production
+    commands:
+      - ./deploy_prod.sh
+  staging:
+    branch: master
+    commands:
+      - ./deploy_staging.sh
+
+
+dependencies:
+    pre:
+        - docker build -t circleci/hello:$CIRCLE_SHA1 .
+test:
+    post:
+        - docker run -d -p 3000:3000 -e "SECRET_KEY_BASE=abcd1234" circleci/hello:$CIRCLE_SHA1; sleep 10
+        - curl --retry 10 --retry-delay 5 -v http://localhost:3000
+deployment:
+    elasticbeanstalk:
+        branch: master
+        commands:
+            #- sed "s/<EMAIL>/$DOCKER_EMAIL/;s/<AUTH>/$DOCKER_AUTH/" < .dockercfg.template > ~/.dockercfg
+            - bash -x support/deploy.sh $CIRCLE_SHA1
